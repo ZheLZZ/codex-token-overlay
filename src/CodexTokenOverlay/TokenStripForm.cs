@@ -15,10 +15,10 @@ internal sealed record OverlayEditPreviewEventArgs(
     int ScalePercent);
 
 internal readonly record struct OverlayRenderMetrics(
-    double LabelFontPoints,
-    double CompactValueFontPoints,
-    double PanelHeaderFontPoints,
-    double HighlightedValueFontPoints,
+    double LabelFontPixels,
+    double CompactValueFontPixels,
+    double PanelHeaderFontPixels,
+    double HighlightedValueFontPixels,
     int CapsuleRadius,
     int PanelRadius,
     int HorizontalPadding,
@@ -43,16 +43,20 @@ internal readonly record struct OverlayRenderMetrics(
         int Scale(int dip) => (int)Math.Round(
             dip * pixelFactor,
             MidpointRounding.AwayFromZero);
-        double ScaleFont(double points) => Math.Round(
-            points * userFactor,
+        // Font point sizes are converted by GDI using the graphics DPI. That implicit
+        // conversion can lag behind the overlay layout while a PerMonitorV2 window is
+        // moving between monitors, making text and geometry use different scales.
+        // Keep both on the same explicit pixel scale instead.
+        double ScaleFontPixels(double points) => Math.Round(
+            points * effectiveDpi / 72d * userFactor,
             2,
             MidpointRounding.AwayFromZero);
 
         return new OverlayRenderMetrics(
-            ScaleFont(10d),
-            ScaleFont(12d),
-            ScaleFont(13d),
-            ScaleFont(15d),
+            ScaleFontPixels(10d),
+            ScaleFontPixels(12d),
+            ScaleFontPixels(13d),
+            ScaleFontPixels(15d),
             Scale(10),
             Scale(14),
             Scale(10),
@@ -76,7 +80,7 @@ internal readonly record struct OverlayRenderDecorationState(
     bool ShowResizeHandle,
     string DragHintText,
     IntRect DragHintBounds,
-    double DragHintFontPoints);
+    double DragHintFontPixels);
 
 internal sealed class TokenStripForm : Form
 {
@@ -181,7 +185,7 @@ internal sealed class TokenStripForm : Form
                     content.Top,
                     hintRight - content.Left,
                     content.Height),
-                metrics.LabelFontPoints);
+                metrics.LabelFontPixels);
         }
     }
 
@@ -586,25 +590,25 @@ internal sealed class TokenStripForm : Form
         using var labelFont = new Font(
             "Segoe UI",
             (float)(decorations.ShowDragHint
-                ? decorations.DragHintFontPoints
-                : metrics.LabelFontPoints),
+                ? decorations.DragHintFontPixels
+                : metrics.LabelFontPixels),
             FontStyle.Regular,
-            GraphicsUnit.Point);
+            GraphicsUnit.Pixel);
         using var compactValueFont = new Font(
             "Segoe UI Semibold",
-            (float)metrics.CompactValueFontPoints,
+            (float)metrics.CompactValueFontPixels,
             FontStyle.Regular,
-            GraphicsUnit.Point);
+            GraphicsUnit.Pixel);
         using var panelHeaderFont = new Font(
             "Segoe UI Semibold",
-            (float)metrics.PanelHeaderFontPoints,
+            (float)metrics.PanelHeaderFontPixels,
             FontStyle.Regular,
-            GraphicsUnit.Point);
+            GraphicsUnit.Pixel);
         using var highlightedValueFont = new Font(
             "Segoe UI Semibold",
-            (float)metrics.HighlightedValueFontPoints,
+            (float)metrics.HighlightedValueFontPixels,
             FontStyle.Regular,
-            GraphicsUnit.Point);
+            GraphicsUnit.Pixel);
         using var backgroundBrush = new SolidBrush(_palette.Background);
         using var borderPen = new Pen(_palette.Border, metrics.StrokeWidth);
         using var dividerPen = new Pen(_palette.Divider, metrics.StrokeWidth);

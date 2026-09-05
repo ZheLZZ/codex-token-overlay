@@ -22,7 +22,7 @@ try {
     New-Item -ItemType Directory -Path $sessionDirectory -Force | Out-Null
 
     # 只使用合成日志，验证发布后的 EXE 确实能够启动并解析完整指标。
-    $sessionMeta = '{"type":"session_meta","payload":{"originator":"Codex Desktop","source":"vscode"}}'
+    $sessionMeta = '{"type":"session_meta","payload":{"originator":"codex_work_desktop","source":"vscode"}}'
     $tokenEvent = '{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":12345,"input_tokens":10000,"cached_input_tokens":7000,"output_tokens":2345,"reasoning_output_tokens":345},"last_token_usage":{"total_tokens":2048},"model_context_window":128000}}}'
     [System.IO.File]::WriteAllLines(
         $sessionPath,

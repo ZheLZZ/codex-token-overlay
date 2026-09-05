@@ -442,6 +442,7 @@ internal sealed class TokenLogMonitor : IDisposable
 {
     private const int TailBytes = 4 * 1024 * 1024;
     private const int HistoricalOverlapBytes = 256 * 1024;
+    private static readonly TimeSpan ForcedSnapshotRefreshInterval = TimeSpan.FromMinutes(2);
     private readonly string _sessionRoot;
     private readonly FileSystemWatcher? _watcher;
     private readonly SessionRelationshipIndex _relationshipIndex;
@@ -450,7 +451,8 @@ internal sealed class TokenLogMonitor : IDisposable
     private readonly Dictionary<string, CachedSessionSnapshot> _descendantSnapshotCache =
         new(StringComparer.OrdinalIgnoreCase);
     private string? _activeLogPath;
-    private DateTime _activeWriteUtc;
+    private LogFileVersion _activeFileVersion;
+    private DateTime _lastActiveSnapshotReadUtc = DateTime.MinValue;
     private DateTime _lastFullScanUtc = DateTime.MinValue;
     private TokenSnapshot? _lastRootSnapshot;
     private TokenSnapshot? _lastSnapshot;
@@ -509,23 +511,26 @@ internal sealed class TokenLogMonitor : IDisposable
             return _lastSnapshot;
         }
 
-        DateTime writeUtc;
-        try
-        {
-            writeUtc = File.GetLastWriteTimeUtc(_activeLogPath);
-        }
-        catch (IOException)
+        var fileVersion = SafeGetFileVersion(_activeLogPath);
+        if (fileVersion is null)
         {
             return _lastSnapshot;
         }
 
-        if (_lastRootSnapshot is null || writeUtc != _activeWriteUtc)
+        var nowUtc = DateTime.UtcNow;
+        if (_lastRootSnapshot is null
+            || fileVersion.Value != _activeFileVersion
+            || nowUtc - _lastActiveSnapshotReadUtc >= ForcedSnapshotRefreshInterval)
         {
-            var parsed = TryReadLatestTokenSnapshot(_activeLogPath, writeUtc, isMainAgent: true);
+            var parsed = TryReadLatestTokenSnapshot(
+                _activeLogPath,
+                fileVersion.Value.WriteUtc,
+                isMainAgent: true);
             if (parsed is not null)
             {
                 // 只有完整解析成功后才提交文件版本，避免卡在写到一半的 JSON 行。
-                _activeWriteUtc = writeUtc;
+                _activeFileVersion = fileVersion.Value;
+                _lastActiveSnapshotReadUtc = nowUtc;
                 _lastRootSnapshot = parsed;
             }
         }
@@ -545,19 +550,24 @@ internal sealed class TokenLogMonitor : IDisposable
         foreach (var descendant in _relationshipIndex.GetDescendants(rootSnapshot.ThreadId))
         {
             livePaths.Add(descendant.FilePath);
-            var writeUtc = SafeGetLastWriteUtc(descendant.FilePath);
-            if (writeUtc == DateTime.MinValue)
+            var fileVersion = SafeGetFileVersion(descendant.FilePath);
+            if (fileVersion is null)
             {
                 continue;
             }
 
+            var nowUtc = DateTime.UtcNow;
             if (!_descendantSnapshotCache.TryGetValue(descendant.FilePath, out var cached)
-                || cached.WriteUtc != writeUtc)
+                || cached.FileVersion != fileVersion.Value
+                || nowUtc - cached.LastReadUtc >= ForcedSnapshotRefreshInterval)
             {
-                var parsed = TryReadLatestTokenSnapshot(descendant.FilePath, writeUtc, isMainAgent: false);
+                var parsed = TryReadLatestTokenSnapshot(
+                    descendant.FilePath,
+                    fileVersion.Value.WriteUtc,
+                    isMainAgent: false);
                 if (parsed is not null)
                 {
-                    cached = new CachedSessionSnapshot(writeUtc, parsed);
+                    cached = new CachedSessionSnapshot(fileVersion.Value, nowUtc, parsed);
                     _descendantSnapshotCache[descendant.FilePath] = cached;
                 }
             }
@@ -757,7 +767,7 @@ internal sealed class TokenLogMonitor : IDisposable
 
             if (!payload.TryGetProperty("originator", out var originator)
                 || originator.ValueKind != JsonValueKind.String
-                || !string.Equals(originator.GetString(), "Codex Desktop", StringComparison.OrdinalIgnoreCase))
+                || !IsCodexDesktopOriginator(originator.GetString()))
             {
                 _rootSessionCache[path] = false;
                 return false;
@@ -778,6 +788,10 @@ internal sealed class TokenLogMonitor : IDisposable
         }
     }
 
+    private static bool IsCodexDesktopOriginator(string? originator) =>
+        string.Equals(originator, "Codex Desktop", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(originator, "codex_work_desktop", StringComparison.OrdinalIgnoreCase);
+
     private void SwitchActiveLog(string? path, string? threadId = null)
     {
         threadId ??= path is null ? null : ExtractThreadId(path);
@@ -789,7 +803,8 @@ internal sealed class TokenLogMonitor : IDisposable
 
         _activeLogPath = path;
         _selectedThreadId = threadId;
-        _activeWriteUtc = DateTime.MinValue;
+        _activeFileVersion = default;
+        _lastActiveSnapshotReadUtc = DateTime.MinValue;
         _lastRootSnapshot = null;
         _lastSnapshot = null;
         _descendantSnapshotCache.Clear();
@@ -1022,11 +1037,32 @@ internal sealed class TokenLogMonitor : IDisposable
         }
     }
 
+    private static LogFileVersion? SafeGetFileVersion(string path)
+    {
+        try
+        {
+            var file = new FileInfo(path);
+            file.Refresh();
+            return file.Exists
+                ? new LogFileVersion(file.LastWriteTimeUtc, file.Length)
+                : null;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
     public void Dispose()
     {
         _watcher?.Dispose();
         _relationshipIndex.Dispose();
     }
 
-    private sealed record CachedSessionSnapshot(DateTime WriteUtc, TokenSnapshot Snapshot);
+    private readonly record struct LogFileVersion(DateTime WriteUtc, long Length);
+
+    private sealed record CachedSessionSnapshot(
+        LogFileVersion FileVersion,
+        DateTime LastReadUtc,
+        TokenSnapshot Snapshot);
 }

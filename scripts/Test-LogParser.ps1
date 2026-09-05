@@ -26,7 +26,9 @@ try {
     New-Item -ItemType Directory -Path $sessionDirectory -Force | Out-Null
 
     # 只使用合成数据，测试仓库不会包含任何真实 Codex 会话内容。
-    $sessionMeta = '{"type":"session_meta","payload":{"id":"' + $threadId + '","originator":"Codex Desktop","source":"vscode"}}'
+    # 新版 Codex Work Desktop 使用 codex_work_desktop；其他合成根会话保留旧值，
+    # 从而同时覆盖新旧 originator 的兼容性。
+    $sessionMeta = '{"type":"session_meta","payload":{"id":"' + $threadId + '","originator":"codex_work_desktop","source":"vscode"}}'
     $tokenEvent = '{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":12345,"input_tokens":10000,"cached_input_tokens":7000,"output_tokens":2345,"reasoning_output_tokens":345},"last_token_usage":{"total_tokens":2048},"model_context_window":128000}}}'
     [System.IO.File]::WriteAllLines(
         $sessionPath,
@@ -77,6 +79,62 @@ try {
     if ($null -eq $tryRun) {
         throw "ProbeRunner.TryRun 入口不存在。"
     }
+
+    # Codex 在 Windows 上可能持续追加 JSONL，但文件 LastWriteTime 一直不变。
+    # 监视器必须先靠文件长度立即刷新，再靠 2 分钟强制重读兜底。
+    $monitorType = $applicationAssembly.GetType("CodexTokenOverlay.TokenLogMonitor", $true)
+    $monitor = [Activator]::CreateInstance(
+        $monitorType,
+        [object[]]@([string](Join-Path $testRoot "sessions")))
+    try {
+        $monitorType.GetProperty("PreferredThreadId").SetValue($monitor, $threadA)
+        $pollMethod = $monitorType.GetMethod("Poll")
+        $firstStableTimestampSnapshot = $pollMethod.Invoke($monitor, [object[]]@($true))
+        if ($firstStableTimestampSnapshot.TotalTokens -ne 11111) {
+            throw "稳定时间戳测试的初始快照不正确。"
+        }
+
+        $stableWriteUtc = [System.IO.File]::GetLastWriteTimeUtc($threadAPath)
+        $grownTokenEvent = $threadATokenEvent.Replace('11111', '33333')
+        [System.IO.File]::AppendAllText(
+            $threadAPath,
+            [Environment]::NewLine + $grownTokenEvent,
+            [System.Text.UTF8Encoding]::new($false))
+        [System.IO.File]::SetLastWriteTimeUtc($threadAPath, $stableWriteUtc)
+
+        $lengthRefreshSnapshot = $pollMethod.Invoke($monitor, [object[]]@($false))
+        if ($lengthRefreshSnapshot.TotalTokens -ne 33333) {
+            throw "LastWriteTime 不变时，日志长度增长未触发立即刷新。"
+        }
+
+        $sameLengthText = [System.IO.File]::ReadAllText($threadAPath).Replace('33333', '44444')
+        [System.IO.File]::WriteAllText(
+            $threadAPath,
+            $sameLengthText,
+            [System.Text.UTF8Encoding]::new($false))
+        [System.IO.File]::SetLastWriteTimeUtc($threadAPath, $stableWriteUtc)
+        $lastReadField = $monitorType.GetField(
+            "_lastActiveSnapshotReadUtc",
+            [System.Reflection.BindingFlags]::Instance -bor [System.Reflection.BindingFlags]::NonPublic)
+        $lastReadField.SetValue($monitor, [DateTime]::UtcNow.AddMinutes(-3))
+
+        $forcedRefreshSnapshot = $pollMethod.Invoke($monitor, [object[]]@($false))
+        if ($forcedRefreshSnapshot.TotalTokens -ne 44444) {
+            throw "文件元数据不变时，2 分钟强制重读未生效。"
+        }
+    }
+    finally {
+        if ($null -ne $monitor) {
+            $monitor.Dispose()
+        }
+    }
+
+    # 恢复线程 A 后续路由切换测试的原始合成数据。
+    [System.IO.File]::WriteAllLines(
+        $threadAPath,
+        [string[]]@($threadASessionMeta, $threadATokenEvent),
+        [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::SetLastWriteTimeUtc($threadAPath, $threadAWriteUtc)
     $normalStartupArguments = [System.Collections.Generic.List[string]]::new()
     $normalStartupInvocation = New-Object object[] 2
     $normalStartupInvocation[0] = $normalStartupArguments

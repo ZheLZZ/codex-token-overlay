@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Refresh Windows token and cost totals when Codex grows an open JSONL log without advancing its modification time, with a two-minute forced reread as a fallback.
+- Restore the collapsed Windows status bar default to total tokens and estimated total cost.
+
 ## [0.3.0] - 2026-08-13
 
 ### Added
