@@ -139,7 +139,7 @@ internal sealed class OverlaySettings
             AnchorMode = AnchorMode.TitleBarTopRight,
             VisibleFields = DefaultVisibleFields,
             CollapsedPrimaryField = DisplayField.Total,
-            CollapsedSecondaryField = DisplayField.ContextPercent,
+            CollapsedSecondaryField = DisplayField.TotalCost,
             ManualPlacementEnabled = true,
             MainAttachment = ManualAttachmentRules.DefaultMainAttachment,
             OverlayScalePercent = ManualAttachmentRules.DefaultScalePercent
@@ -200,7 +200,7 @@ internal sealed class OverlaySettings
                 (DisplayField)(persisted.VisibleFields ?? (int)DefaultVisibleFields));
             settings.SetCollapsedFields(
                 (DisplayField)(persisted.CollapsedPrimaryField ?? (int)DisplayField.Total),
-                (DisplayField)(persisted.CollapsedSecondaryField ?? (int)DisplayField.ContextPercent));
+                (DisplayField)(persisted.CollapsedSecondaryField ?? (int)DisplayField.TotalCost));
             settings.ManualPlacementEnabled = persisted.ManualPlacementEnabled ?? false;
             settings.MainAttachment = ManualAttachmentRules.SanitizeMain(
                 DeserializeAttachment(persisted.MainAttachment));
@@ -372,13 +372,13 @@ internal sealed class OverlaySettings
             : DisplayField.Total;
         CollapsedSecondaryField = DisplayFieldRules.IsSingleSupported(secondary)
             ? secondary
-            : DisplayField.ContextPercent;
+            : DisplayField.TotalCost;
 
         if (CollapsedPrimaryField == CollapsedSecondaryField)
         {
-            CollapsedSecondaryField = CollapsedPrimaryField == DisplayField.ContextPercent
+            CollapsedSecondaryField = CollapsedPrimaryField == DisplayField.TotalCost
                 ? DisplayField.Total
-                : DisplayField.ContextPercent;
+                : DisplayField.TotalCost;
         }
     }
 }

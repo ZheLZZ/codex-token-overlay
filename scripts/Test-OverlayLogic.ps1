@@ -1627,7 +1627,7 @@ try {
         Assert-Condition ($migrated.Settings.AnchorMode -eq 3) '旧设置迁移后未切换到标题栏右上。'
         Assert-Condition ($migrated.Settings.VisibleFields -eq 511) '旧设置迁移后未保留可见字段。'
         Assert-Condition ($migrated.Settings.CollapsedPrimaryField -eq 1) '旧设置迁移后左侧指标不正确。'
-        Assert-Condition ($migrated.Settings.CollapsedSecondaryField -eq 64) '旧设置迁移后右侧指标不正确。'
+        Assert-Condition ($migrated.Settings.CollapsedSecondaryField -eq 1024) '旧设置迁移后右侧指标不正确。'
         Assert-Condition ($migrated.MustPersist -eq $true) '旧设置迁移后必须立即持久化。'
 
         $currentOldAnchor = Get-ProbeCase $response 'keep-current-old-anchor'
@@ -1650,13 +1650,13 @@ try {
         Assert-Condition ($repaired.Settings.AnchorMode -eq 3) '未知吸附模式未回退到标题栏右上。'
         Assert-Condition ($repaired.Settings.VisibleFields -eq 1) '全未知可见字段未回退到总 Token。'
         Assert-Condition ($repaired.Settings.CollapsedPrimaryField -eq 1) '无效左侧指标未回退到总 Token。'
-        Assert-Condition ($repaired.Settings.CollapsedSecondaryField -eq 64) '无效右侧指标未回退到上下文百分比。'
+        Assert-Condition ($repaired.Settings.CollapsedSecondaryField -eq 1024) '无效右侧指标未回退到估算总价。'
 
         $missing = Get-ProbeCase $response 'missing-settings-file'
         Assert-Condition ($missing.Settings.SettingsVersion -eq 1) '缺少设置文件时未使用当前版本默认值。'
         Assert-Condition ($missing.Settings.AnchorMode -eq 3) '缺少设置文件时默认吸附模式不正确。'
         Assert-Condition ($missing.Settings.CollapsedPrimaryField -eq 1) '缺少设置文件时默认左侧指标不正确。'
-        Assert-Condition ($missing.Settings.CollapsedSecondaryField -eq 64) '缺少设置文件时默认右侧指标不正确。'
+        Assert-Condition ($missing.Settings.CollapsedSecondaryField -eq 1024) '缺少设置文件时默认右侧指标不正确。'
         Assert-Condition ($missing.Settings.ManualPlacementEnabled -eq $true) '缺少设置文件时必须启用默认手动放置。'
         Assert-Condition ($missing.Settings.MainAttachment.ReferencePoint -eq 2) '缺少设置文件时默认主窗口参考点不正确。'
         Assert-Condition ($missing.Settings.MainAttachment.OffsetXDip -eq -344 -and $missing.Settings.MainAttachment.OffsetYDip -eq 24) '缺少设置文件时默认主窗口偏移不正确。'
@@ -1713,7 +1713,7 @@ try {
 
         $duplicateSlots = Get-ProbeCase $response 'duplicate-valid-slots-remain-distinct'
         Assert-Condition ($duplicateSlots.Settings.CollapsedPrimaryField -eq 64) '有效重复指标错误地改写了左侧选择。'
-        Assert-Condition ($duplicateSlots.Settings.CollapsedSecondaryField -eq 1) '有效重复指标未回退到与左侧不同的安全值。'
+        Assert-Condition ($duplicateSlots.Settings.CollapsedSecondaryField -eq 1024) '有效重复指标未回退到与左侧不同的安全值。'
 
         $saveReload = Get-ProbeCase $response 'save-reload-isolated-settings'
         Assert-Condition ($saveReload.Settings.SettingsVersion -eq 1) '保存重载后设置版本不正确。'
@@ -1758,7 +1758,7 @@ try {
         Assert-Condition ($invalidJson.Settings.SettingsVersion -eq 1) '损坏 JSON 未回退到当前默认版本。'
         Assert-Condition ($invalidJson.Settings.AnchorMode -eq 3) '损坏 JSON 未回退到默认吸附模式。'
         Assert-Condition ($invalidJson.Settings.CollapsedPrimaryField -eq 1) '损坏 JSON 未回退到默认左侧指标。'
-        Assert-Condition ($invalidJson.Settings.CollapsedSecondaryField -eq 64) '损坏 JSON 未回退到默认右侧指标。'
+        Assert-Condition ($invalidJson.Settings.CollapsedSecondaryField -eq 1024) '损坏 JSON 未回退到默认右侧指标。'
     }
 
     if ($areas -contains 'Presentation') {
@@ -2485,7 +2485,7 @@ try {
         $createRenderMetrics = $renderMetricsType.GetMethod('Create', [System.Reflection.BindingFlags]'Public, Static')
         $titleRenderMetrics = $createRenderMetrics.Invoke($null, [object[]]@([uint32]96, [int]$titleExpanded.ScalePercent))
         Assert-Condition `
-            ($titleRenderMetrics.LabelFontPoints -eq 10.1 -and $titleRenderMetrics.CompactValueFontPoints -eq 12.12 -and $titleRenderMetrics.CapsuleRadius -eq 10 -and $titleRenderMetrics.HorizontalPadding -eq 10) `
+            ($titleRenderMetrics.LabelFontPixels -eq 13.47 -and $titleRenderMetrics.CompactValueFontPixels -eq 16.16 -and $titleRenderMetrics.CapsuleRadius -eq 10 -and $titleRenderMetrics.HorizontalPadding -eq 10) `
             '标题栏绘制指标必须来自布局返回的 101% 有效比例。'
 
         $metrics = $createRenderMetrics.Invoke($null, [object[]]@([uint32]96, [int]100))
@@ -2500,14 +2500,14 @@ try {
             $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
             $labelFont = [System.Drawing.Font]::new(
                 'Segoe UI',
-                [single]$metrics.LabelFontPoints,
+                [single]$metrics.LabelFontPixels,
                 [System.Drawing.FontStyle]::Regular,
-                [System.Drawing.GraphicsUnit]::Point)
+                [System.Drawing.GraphicsUnit]::Pixel)
             $valueFont = [System.Drawing.Font]::new(
                 'Segoe UI Semibold',
-                [single]$metrics.CompactValueFontPoints,
+                [single]$metrics.CompactValueFontPixels,
                 [System.Drawing.FontStyle]::Regular,
-                [System.Drawing.GraphicsUnit]::Point)
+                [System.Drawing.GraphicsUnit]::Pixel)
             Assert-Condition ($labelFont.Name -eq 'Segoe UI') '真实字体测量必须解析到 Segoe UI。'
             Assert-Condition ($valueFont.Name -eq 'Segoe UI Semibold') '真实字体测量必须解析到 Segoe UI Semibold。'
             $measureFlags = [System.Windows.Forms.TextFormatFlags]::NoPadding -bor [System.Windows.Forms.TextFormatFlags]::SingleLine
@@ -3017,7 +3017,7 @@ try {
         Assert-Rect $contract.EditRenderDecorations100.DragHintBounds 10 0 156 34 '100% 拖动提示布局必须使用胶囊内容区。'
         Assert-Rect $contract.EditRenderDecorations130.DragHintBounds 13 0 203 44 '130% 拖动提示布局必须随统一指标缩放。'
         Assert-Condition `
-            ($contract.EditRenderDecorations60.DragHintFontPoints -eq 6.0 -and $contract.EditRenderDecorations100.DragHintFontPoints -eq 10.0 -and $contract.EditRenderDecorations130.DragHintFontPoints -eq 13.0) `
+            ($contract.EditRenderDecorations60.DragHintFontPixels -eq 8.0 -and $contract.EditRenderDecorations100.DragHintFontPixels -eq 13.33 -and $contract.EditRenderDecorations130.DragHintFontPixels -eq 17.33) `
             '拖动提示字体必须由 OverlayRenderMetrics 缩放。'
         Assert-Condition ($contract.MovePreview.Kind -eq 0) '拖动模拟必须报告 Move。'
         Assert-Condition `
@@ -3060,17 +3060,20 @@ try {
         Assert-Condition ($contract.RestoredMouseActivateResult -eq 3) '结束编辑后 WM_MOUSEACTIVATE 必须恢复 MA_NOACTIVATE。'
 
         Assert-Condition `
-            ($contract.Metrics60.LabelFontPoints -eq 6.0 -and $contract.Metrics100.LabelFontPoints -eq 10.0 -and $contract.Metrics130.LabelFontPoints -eq 13.0) `
-            '标签字体必须使用统一用户缩放因子。'
+            ($contract.Metrics60.LabelFontPixels -eq 8.0 -and $contract.Metrics100.LabelFontPixels -eq 13.33 -and $contract.Metrics130.LabelFontPixels -eq 17.33) `
+            '标签字体必须显式换算为与布局一致的像素。'
         Assert-Condition `
-            ($contract.Metrics60.CompactValueFontPoints -eq 7.2 -and $contract.Metrics100.CompactValueFontPoints -eq 12.0 -and $contract.Metrics130.CompactValueFontPoints -eq 15.6) `
-            '紧凑值字体必须使用统一用户缩放因子。'
+            ($contract.Metrics60.CompactValueFontPixels -eq 9.6 -and $contract.Metrics100.CompactValueFontPixels -eq 16.0 -and $contract.Metrics130.CompactValueFontPixels -eq 20.8) `
+            '紧凑值字体必须显式换算为与布局一致的像素。'
         Assert-Condition `
-            ($contract.Metrics60.PanelHeaderFontPoints -eq 7.8 -and $contract.Metrics100.PanelHeaderFontPoints -eq 13.0 -and $contract.Metrics130.PanelHeaderFontPoints -eq 16.9) `
-            '面板标题字体必须使用统一用户缩放因子。'
+            ($contract.Metrics60.PanelHeaderFontPixels -eq 10.4 -and $contract.Metrics100.PanelHeaderFontPixels -eq 17.33 -and $contract.Metrics130.PanelHeaderFontPixels -eq 22.53) `
+            '面板标题字体必须显式换算为与布局一致的像素。'
         Assert-Condition `
-            ($contract.Metrics60.HighlightedValueFontPoints -eq 9.0 -and $contract.Metrics100.HighlightedValueFontPoints -eq 15.0 -and $contract.Metrics130.HighlightedValueFontPoints -eq 19.5) `
-            '高亮值字体必须使用统一用户缩放因子。'
+            ($contract.Metrics60.HighlightedValueFontPixels -eq 12.0 -and $contract.Metrics100.HighlightedValueFontPixels -eq 20.0 -and $contract.Metrics130.HighlightedValueFontPixels -eq 26.0) `
+            '高亮值字体必须显式换算为与布局一致的像素。'
+        Assert-Condition `
+            ($contract.Metrics150Dpi.LabelFontPixels -eq 20.0 -and $contract.Metrics150Dpi.CompactValueFontPixels -eq 24.0 -and $contract.Metrics150Dpi.PanelHeaderFontPixels -eq 26.0 -and $contract.Metrics150Dpi.HighlightedValueFontPixels -eq 30.0) `
+            '150% 显示器 DPI 下字体必须只换算一次，并与像素布局保持同比例。'
         Assert-Condition `
             ($contract.Metrics60.CapsuleRadius -eq 6 -and $contract.Metrics100.CapsuleRadius -eq 10 -and $contract.Metrics130.CapsuleRadius -eq 13) `
             '胶囊圆角必须使用统一 DPI/用户缩放因子。'
