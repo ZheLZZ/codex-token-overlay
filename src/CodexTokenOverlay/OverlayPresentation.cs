@@ -161,20 +161,20 @@ internal static class OverlayPresentationBuilder
         var value = field switch
         {
             DisplayField.Total => FormatTokenCount(snapshot.TotalTokens),
-            DisplayField.Input => $"{FormatTokenCount(snapshot.InputTokens)} · {FormatUsd(cost.InputCostUsd)}",
-            DisplayField.Output => $"{FormatTokenCount(snapshot.OutputTokens)} · {FormatUsd(cost.OutputCostUsd)}",
-            DisplayField.CacheHit => $"{FormatTokenCount(snapshot.CachedInputTokens)} · {FormatUsd(cost.CachedInputCostUsd)}",
+            DisplayField.Input => $"{FormatTokenCount(snapshot.InputTokens)} · {FormatCost(cost.InputCostUsd, cost.HasUnknownPricing)}",
+            DisplayField.Output => $"{FormatTokenCount(snapshot.OutputTokens)} · {FormatCost(cost.OutputCostUsd, cost.HasUnknownPricing)}",
+            DisplayField.CacheHit => $"{FormatTokenCount(snapshot.CachedInputTokens)} · {FormatCost(cost.CachedInputCostUsd, cost.HasUnknownPricing)}",
             DisplayField.CacheHitRate => $"{snapshot.CacheHitPercent:0}%",
             DisplayField.CacheMiss => FormatTokenCount(snapshot.UncachedInputTokens),
             DisplayField.Context => $"{FormatTokenCount(snapshot.ContextUsedTokens)} / {FormatTokenCount(snapshot.ContextWindowTokens)}",
             DisplayField.ContextPercent => $"{contextPercent:0}%",
             DisplayField.Reasoning => FormatTokenCount(snapshot.ReasoningOutputTokens),
             DisplayField.Thread => ShortThreadId(snapshot.ThreadId),
-            DisplayField.TotalCost => FormatUsd(cost.TotalCostUsd),
+            DisplayField.TotalCost => FormatCost(cost.TotalCostUsd, cost.HasUnknownPricing),
             DisplayField.MainAgent => FormatTokenCount(mainAgent.TotalTokens),
-            DisplayField.MainAgentCost => FormatUsd(mainAgent.TotalCostUsd),
+            DisplayField.MainAgentCost => FormatCost(mainAgent.TotalCostUsd, mainAgent.HasUnknownPricing),
             DisplayField.Subagents => FormatTokenCount(subagents.TotalTokens),
-            DisplayField.SubagentsCost => FormatUsd(subagents.TotalCostUsd),
+            DisplayField.SubagentsCost => FormatCost(subagents.TotalCostUsd, subagents.HasUnknownPricing),
             _ => throw new ArgumentOutOfRangeException(nameof(field), field, "不支持的展示字段。")
         };
         var hasValue = field != DisplayField.Thread || !string.IsNullOrWhiteSpace(snapshot.ThreadId);
@@ -212,26 +212,51 @@ internal static class OverlayPresentationBuilder
         if (usages.Count == 0)
         {
             return isMainAgent
-                ? new AgentBreakdown("Sol", snapshot.TotalTokens, TokenCostEstimator.Estimate(snapshot).TotalCostUsd)
-                : new AgentBreakdown("无", 0, 0);
+                ? new AgentBreakdown("未知", snapshot.TotalTokens, 0, snapshot.TotalTokens > 0)
+                : new AgentBreakdown("无", 0, 0, false);
         }
 
         var modelGroups = usages
             .GroupBy(
-                usage => usage.Model.Contains("luna", StringComparison.OrdinalIgnoreCase) ? "Luna" : "Sol",
+                usage => FormatModelName(string.IsNullOrEmpty(usage.DisplayModel) ? usage.Model : usage.DisplayModel),
                 StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var countText = string.Join("+", modelGroups.Select(group =>
-            isMainAgent && group.Count() == 1 ? group.Key : $"{group.Key}×{group.Count()}"));
+        {
+            var count = group.Select((usage, index) =>
+                string.IsNullOrEmpty(usage.SessionId) ? $"legacy-{index}" : usage.SessionId)
+                .Distinct(StringComparer.OrdinalIgnoreCase).Count();
+            return isMainAgent && count == 1 ? group.Key : $"{group.Key}×{count}";
+        }));
         var tokens = usages.Aggregate(0L, (sum, usage) =>
             long.MaxValue - sum < Math.Max(0, usage.TotalTokens)
                 ? long.MaxValue
                 : sum + Math.Max(0, usage.TotalTokens));
-        var cost = TokenCostEstimator.Estimate(usages).TotalCostUsd;
-        return new AgentBreakdown(countText, tokens, cost);
+        var cost = TokenCostEstimator.Estimate(usages);
+        return new AgentBreakdown(countText, tokens, cost.TotalCostUsd, cost.HasUnknownPricing);
     }
 
-    private sealed record AgentBreakdown(string ModelText, long TotalTokens, decimal TotalCostUsd);
+    public static string FormatModelName(string? model)
+    {
+        if (string.IsNullOrWhiteSpace(model) || model.Equals("unknown", StringComparison.OrdinalIgnoreCase))
+        {
+            return "未知";
+        }
+
+        var name = SanitizeSingleLine(model).Trim();
+        if (!name.StartsWith("gpt-", StringComparison.OrdinalIgnoreCase))
+        {
+            return name;
+        }
+
+        var parts = name[4..].Split('-', StringSplitOptions.RemoveEmptyEntries);
+        return "GPT-" + string.Join(" ", parts.Select(part =>
+            CultureInfo.InvariantCulture.TextInfo.ToTitleCase(part.ToLowerInvariant())));
+    }
+
+    private static string FormatCost(decimal value, bool unknown) => unknown ? NoValue : FormatUsd(value);
+
+    private sealed record AgentBreakdown(string ModelText, long TotalTokens, decimal TotalCostUsd, bool HasUnknownPricing);
 
     private static string SanitizeSingleLine(string value)
     {

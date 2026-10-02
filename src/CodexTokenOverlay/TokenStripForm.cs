@@ -904,7 +904,11 @@ internal sealed class TokenStripForm : Form
         Font labelFont,
         Font valueFont)
     {
-        var labelWidth = Math.Max(0, bounds.Width / 2);
+        var valueWidth = TextRenderer.MeasureText(
+            graphics, metric.Value, valueFont, Size.Empty,
+            TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width;
+        var gap = Math.Max(1, (int)Math.Ceiling(graphics.DpiX / 96f * 8));
+        var labelWidth = Math.Clamp(bounds.Width - valueWidth - gap, 0, bounds.Width);
         TextRenderer.DrawText(
             graphics,
             metric.ExpandedLabel,

@@ -80,16 +80,66 @@ internal static class ProbeRunner
         if (args.Count >= 2 && args[0].Equals("--ipc-probe", StringComparison.OrdinalIgnoreCase))
         {
             using var routeMonitor = new CodexIpcActiveThreadMonitor();
+            var visibleMonitor = new VisibleThreadRouteMonitor(sessionRoot);
             var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
             ActiveThreadRouteStatus status;
             do
             {
                 Thread.Sleep(100);
+                var observation = visibleMonitor.Poll();
+                if (observation.HasWindow)
+                {
+                    routeMonitor.SetVisibleSelection(VisibleThreadRouteResolver.Resolve(
+                        observation, routeMonitor.GetLocalFollowingThreadIds()));
+                }
                 status = routeMonitor.GetStatus();
             }
             while (DateTime.UtcNow < deadline && string.IsNullOrWhiteSpace(status.ThreadId));
 
             WriteJson(args[1], status);
+            return true;
+        }
+
+        if (args.Count >= 2 && args[0].Equals("--visible-thread-probe", StringComparison.OrdinalIgnoreCase))
+        {
+            var monitor = new VisibleThreadRouteMonitor(sessionRoot);
+            var observation = args.Count >= 3 && long.TryParse(args[2], out var handle)
+                ? monitor.ReadKnownWindowNow(new IntPtr(handle))
+                : monitor.ReadForegroundNow();
+            WriteJson(args[1], new
+            {
+                Observation = observation,
+                Selection = VisibleThreadRouteResolver.Resolve(observation, Array.Empty<string>())
+            });
+            return true;
+        }
+
+        if (args.Count >= 3 && args[0].Equals("--route-probe", StringComparison.OrdinalIgnoreCase))
+        {
+            var request = ReadJson<VisibleThreadRouteProbeRequest>(args[2]);
+            WriteJson(args[1], VisibleThreadRouteProbe.Execute(request));
+            return true;
+        }
+
+        if (args.Count >= 4 && args[0].Equals("--strict-route-probe", StringComparison.OrdinalIgnoreCase))
+        {
+            using var monitor = new TokenLogMonitor(sessionRoot) { RequirePreferredThread = true };
+            var initial = monitor.Poll(forceFullScan: true);
+            monitor.PreferredThreadId = args[2];
+            var first = monitor.Poll();
+            monitor.PreferredThreadId = null;
+            var cleared = monitor.Poll();
+            var clearedId = monitor.ActiveThreadId;
+            monitor.PreferredThreadId = args[2];
+            monitor.Poll();
+            monitor.PinActiveSession = true;
+            monitor.PreferredThreadId = null;
+            var pinned = monitor.Poll();
+            monitor.PinActiveSession = false;
+            monitor.PreferredThreadId = args[3];
+            var switched = monitor.Poll();
+            WriteJson(args[1], new { Initial = initial, First = first, Cleared = cleared,
+                ClearedId = clearedId, Pinned = pinned, Switched = switched });
             return true;
         }
 
@@ -139,7 +189,13 @@ internal static class ProbeRunner
     internal static void PrepareWindowProbeDpiAwareness()
     {
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+        // Reflection probes can be hosted in a process whose DPI mode was already
+        // chosen. Override only this probe thread before reading native geometry.
+        SetThreadDpiAwarenessContext(new IntPtr(-4));
     }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SetThreadDpiAwarenessContext(IntPtr dpiContext);
 
     private static T ReadJson<T>(string path)
     {

@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-Codex Token 状态条是一个只读桌面小工具，用于显示 Codex Desktop 当前选中任务的 Token 使用情况。它支持 Windows 和 macOS，通过 Codex 本机 IPC 跟随当前任务，并从本地 JSONL 会话日志读取统计数据；因此切换到没有正在运行的旧任务时也能立即刷新。
+Codex Token 状态条是一个只读桌面小工具，用于显示 Codex Desktop 当前选中任务的 Token 使用情况。Windows 通过前台窗口的无障碍标题和本机会话索引识别当前聊天，macOS 通过本机 IPC 跟随任务；两者均从本地 JSONL 会话日志读取统计数据，切换到没有正在运行的旧任务时也能刷新。
 
 > [!IMPORTANT]
 > 这是非官方社区项目，并非由 OpenAI 开发、认可或提供支持。它依赖 Codex Desktop 的本地 JSONL 格式和内部 IPC 消息；这些内部实现可能在未来版本中改变。
@@ -15,7 +15,7 @@ Codex Token 状态条是一个只读桌面小工具，用于显示 Codex Desktop
 - 可以自由选择实际显示哪些字段，并保证至少保留一个字段。
 - Windows 使用不会抢占输入焦点、跟随 Codex 主窗口的胶囊和系统托盘菜单。
 - macOS 使用原生菜单栏，并可从菜单设置登录时启动。
-- 内部 IPC 不可用时自动退回最近更新的 Codex Desktop 根会话。
+- Windows 识别不到当前聊天时显示等待；macOS 在内部 IPC 不可用时退回最近更新的 Codex Desktop 根会话。
 - 只读取本地文件，不含遥测、分析、网络 API 或上传功能。
 
 ## 下载
@@ -102,6 +102,27 @@ GitHub 上的未签名程序可能触发 Windows SmartScreen。请先确认文�
 
 这些数值来自本地会话日志事件，不等同于账单、API 费用计算或权威的 ChatGPT 套餐用量。
 
+### Windows 费用估算
+
+费用按 2026-09-30 核验的 OpenAI **Standard API 单价**折算。每百万 Token 的美元价格如下（输入列不含缓存读取或缓存写入）：
+
+| 模型 | 输入 | 缓存读取 | 缓存写入 | 输出 |
+| --- | ---: | ---: | ---: | ---: |
+| GPT-6.1 Sol | 2.00 | 0.10 | 2.50 | 10.00 |
+| GPT-6 Sol | 2.00 | 0.20 | 2.50 | 10.00 |
+| GPT-6 Astra | 10.00 | 1.00 | 12.50 | 50.00 |
+| GPT-6 Luna | 0.10 | 0.01 | 0.125 | 0.50 |
+| GPT-5.6 Sol（含 gpt-5.6 别名） | 4.00 | 0.40 | 5.00 | 20.00 |
+| GPT-5.6 Terra | 2.00 | 0.20 | 2.50 | 12.00 |
+| GPT-5.6 Luna | 0.20 | 0.02 | 0.25 | 1.20 |
+| GPT-5.5 | 5.00 | 0.50 | 不单独加价 | 30.00 |
+
+来源：[官方价格表](https://developers.openai.com/api/docs/pricing)、[GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol)、[GPT-6 Sol](https://developers.openai.com/api/docs/models/gpt-6-sol)、[GPT-5.6 Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra)、[GPT-5.6 Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna)、[GPT-5.5](https://developers.openai.com/api/docs/models/gpt-5.5)。GPT-5.6 Sol 当前为促销单价，官方承诺至少持续至 2026-11-21；价格表需要后续核验更新。
+
+程序按相邻累计计数的增量、当时的模型及单次请求输入长度累计费用，避免重复事件重复计费或切换模型后将历史用量按新模型重算。单次输入超过 272,000 Token 时，输入、缓存读取和缓存写入单价乘 2，输出单价乘 1.5；不会因为会话累计输入或模型上下文容量超过该值而触发加价。
+
+输入费用包含普通未缓存输入及日志提供的 `cache_write_input_tokens`，缓存写入采用对应单价而非再叠加普通输入费。推理 Token 已包含在输出中，不重复收费。模型缺失或价格未知时显示“—”。日志缺少缓存写入字段时按零处理；日志未提供服务档位或区域计费信息，估算采用 Standard、不含工具调用费、Fast/Ultrafast 附加费或区域溢价。该估算用于比较 Token 成本，不表示 ChatGPT 订阅的实际扣费。
+
 ## 当前任务跟随原理
 
 程序不会修改 Codex 数据：
@@ -109,10 +130,10 @@ GitHub 上的未签名程序可能触发 Windows SmartScreen。请先确认文�
 1. 以只读客户端连接 Codex Desktop 的本地 IPC。
    - Windows：`\\.\pipe\codex-ipc`
    - macOS：`$CODEX_HOME/ipc/ipc.sock`，并兼容旧版临时 Socket 路径
-2. 监听当前 Codex 窗口正在跟随的任务 ID。
+2. Windows 读取前台主窗口的聊天标题，在 `$CODEX_HOME/state_N.sqlite` 中只读匹配显示名称；IPC 中的完整订阅集合仅辅助重复标题消歧。新版 IPC 会广播后台和远程聊天的订阅，不能直接当成当前选中聊天。macOS 继续使用 IPC 任务路由。
 3. 找到对应的根会话 JSONL，并读取最后一个完整的 `token_count` 事件。
 4. 一旦任务 ID 改变就强制解析，因此切换到未运行任务时不依赖日志更新。
-5. IPC 不可用时才退回最近更新的 Codex Desktop 根会话。
+5. Windows 在没有匹配、标题仍有多个候选或窗口信息暂不可用时显示等待，避免误显示其他聊天的用量；macOS 在 IPC 不可用时退回最近更新的根会话。远程和云端聊天没有本机日志时不显示本机用量。
 
 macOS 版会验证 IPC 路径确实是当前用户拥有的 Unix Socket，并验证其目录不可被其他用户写入。程序只连接，不会创建、删除或替换 Codex 的 Socket。
 
@@ -129,7 +150,7 @@ Codex JSONL 可能包含对话内容。报告问题时请勿上传这些文件�
 
 ### 切换任务后没有更新
 
-当前任务信号来自 Codex 内部 IPC。请同时重启 Codex Desktop 和本工具；如果 Codex 刚更新，请检查项目是否已有新版本。回退模式能显示近期 Token，但不一定能识别界面中选中的未运行任务。
+Windows 需要主窗口的聊天标题和本机会话索引可读取；标题重复且无法消歧时会等待。请切换到已完成过模型回复的本机聊天，并重启本工具。macOS 使用内部 IPC；Codex 更新后可检查本工具是否已有适配版本。
 
 ### macOS 菜单栏显示 `Token —`
 
@@ -153,6 +174,7 @@ Codex JSONL 可能包含对话内容。报告问题时请勿上传这些文件�
 dotnet restore .\src\CodexTokenOverlay\CodexTokenOverlay.csproj
 dotnet build .\src\CodexTokenOverlay\CodexTokenOverlay.csproj -c Release
 .\scripts\Test-LogParser.ps1
+.\scripts\Test-TokenPricing.ps1
 ```
 
 同时生成本地轻量版和独立版发行包：

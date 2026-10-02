@@ -30,6 +30,11 @@ internal static class CodexWindowClassifier
             return null;
         }
 
+        if (IsHost(foreground))
+        {
+            return new CodexWindowCandidateSelection(foreground);
+        }
+
         var sameProcess = candidates
             .Where(item => item.ProcessId == foreground.ProcessId && item.IsCodexProcess)
             .ToArray();

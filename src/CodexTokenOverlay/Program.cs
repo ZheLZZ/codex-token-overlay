@@ -87,6 +87,10 @@ internal sealed record TokenPricingUsage(
     long OutputTokens,
     bool IsMainAgent)
 {
+    public long CacheWriteInputTokens { get; init; }
+    public bool IsLongContext { get; init; }
+    public string SessionId { get; init; } = string.Empty;
+    public string DisplayModel { get; init; } = string.Empty;
     public long UncachedInputTokens => Math.Max(0, InputTokens - CachedInputTokens);
 }
 
@@ -120,7 +124,11 @@ internal sealed record ActiveThreadRouteStatus(
     int ActiveWindowCount,
     bool IsConnected,
     long Version,
-    string? LastError);
+    string? LastError)
+{
+    public string? SelectionReason { get; init; }
+    public int SubscribedThreadCount { get; init; }
+}
 
 internal sealed class CodexIpcActiveThreadMonitor : IDisposable
 {
@@ -133,12 +141,12 @@ internal sealed class CodexIpcActiveThreadMonitor : IDisposable
     private string? _activeThreadId;
     private string? _lastError;
     private bool _isConnected;
-    private long _sequence;
     private long _version;
+    private string? _selectionReason;
 
-    public CodexIpcActiveThreadMonitor()
+    public CodexIpcActiveThreadMonitor(bool connect = true)
     {
-        _runner = Task.Run(() => RunAsync(_cancellation.Token));
+        _runner = connect ? Task.Run(() => RunAsync(_cancellation.Token)) : Task.CompletedTask;
     }
 
     public ActiveThreadRouteStatus GetStatus()
@@ -147,10 +155,40 @@ internal sealed class CodexIpcActiveThreadMonitor : IDisposable
         {
             return new ActiveThreadRouteStatus(
                 _activeThreadId,
-                _activeByWindow.Count,
+                _activeByWindow.Keys.Select(key => key.Split('\u001f')[0]).Distinct().Count(),
                 _isConnected,
                 _version,
-                _lastError);
+                _lastError)
+            {
+                SelectionReason = _selectionReason,
+                SubscribedThreadCount = _activeByWindow.Count
+            };
+        }
+    }
+
+    public IReadOnlyCollection<string> GetLocalFollowingThreadIds()
+    {
+        lock (_sync)
+        {
+            return _activeByWindow.Values
+                .Where(item => item.HostId.Equals("local", StringComparison.Ordinal))
+                .Select(item => item.ThreadId)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+    }
+
+    public void SetVisibleSelection(VisibleThreadSelection selection)
+    {
+        lock (_sync)
+        {
+            if (!string.Equals(selection.ThreadId, _activeThreadId, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(selection.Reason, _selectionReason, StringComparison.Ordinal))
+            {
+                _activeThreadId = selection.ThreadId;
+                _selectionReason = selection.Reason;
+                _version++;
+            }
         }
     }
 
@@ -201,6 +239,10 @@ internal sealed class CodexIpcActiveThreadMonitor : IDisposable
                     try
                     {
                         ProcessFrame(payload);
+                        if (CreateDiscoveryResponse(payload) is { } response)
+                        {
+                            await SendFrameAsync(pipe, response, cancellationToken).ConfigureAwait(false);
+                        }
                     }
                     catch (Exception exception) when (exception is JsonException or InvalidOperationException)
                     {
@@ -242,6 +284,11 @@ internal sealed class CodexIpcActiveThreadMonitor : IDisposable
             @params = new { clientType = "codex-token-overlay" }
         };
         var payload = JsonSerializer.SerializeToUtf8Bytes(request);
+        await SendFrameAsync(pipe, payload, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task SendFrameAsync(Stream pipe, byte[] payload, CancellationToken cancellationToken)
+    {
         var prefix = new byte[sizeof(uint)];
         BinaryPrimitives.WriteUInt32LittleEndian(prefix, (uint)payload.Length);
         await pipe.WriteAsync(prefix.AsMemory(), cancellationToken).ConfigureAwait(false);
@@ -249,7 +296,28 @@ internal sealed class CodexIpcActiveThreadMonitor : IDisposable
         await pipe.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private void ProcessFrame(byte[] payload)
+    internal static byte[]? CreateDiscoveryResponse(byte[] payload)
+    {
+        using var document = JsonDocument.Parse(payload);
+        var root = document.RootElement;
+        if (!root.TryGetProperty("type", out var type)
+            || type.ValueKind != JsonValueKind.String
+            || type.GetString() != "client-discovery-request"
+            || !root.TryGetProperty("requestId", out var id)
+            || id.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+        // This is a read-only observer, never a handler for Desktop/IDE requests.
+        return JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            type = "client-discovery-response",
+            requestId = id.GetString(),
+            response = new { canHandle = false }
+        });
+    }
+
+    internal void ProcessFrame(byte[] payload)
     {
         using var document = JsonDocument.Parse(payload);
         var root = document.RootElement;
@@ -295,12 +363,12 @@ internal sealed class CodexIpcActiveThreadMonitor : IDisposable
             return;
         }
 
-        var key = $"{sourceClientId}\u001f{hostId}";
+        var key = $"{sourceClientId}\u001f{hostId}\u001f{conversationId}";
         lock (_sync)
         {
             if (followingElement.GetBoolean())
             {
-                _activeByWindow[key] = new ActiveConversation(conversationId, ++_sequence);
+                _activeByWindow[key] = new ActiveConversation(conversationId, hostId);
             }
             else if (_activeByWindow.TryGetValue(key, out var active)
                 && active.ThreadId.Equals(conversationId, StringComparison.OrdinalIgnoreCase))
@@ -346,7 +414,6 @@ internal sealed class CodexIpcActiveThreadMonitor : IDisposable
         lock (_sync)
         {
             _activeByWindow.Clear();
-            _activeThreadId = null;
             _lastError = null;
             _isConnected = true;
             _version++;
@@ -357,10 +424,9 @@ internal sealed class CodexIpcActiveThreadMonitor : IDisposable
     {
         lock (_sync)
         {
-            var changed = _isConnected || _activeByWindow.Count > 0 || _activeThreadId is not null;
+            var changed = _isConnected || _activeByWindow.Count > 0;
             _isConnected = false;
             _activeByWindow.Clear();
-            _activeThreadId = null;
             if (!string.IsNullOrWhiteSpace(error))
             {
                 _lastError = error;
@@ -374,15 +440,9 @@ internal sealed class CodexIpcActiveThreadMonitor : IDisposable
 
     private void RecomputeActiveThread()
     {
-        var nextThreadId = _activeByWindow.Values
-            .OrderByDescending(item => item.Sequence)
-            .Select(item => item.ThreadId)
-            .FirstOrDefault();
-        if (!string.Equals(nextThreadId, _activeThreadId, StringComparison.OrdinalIgnoreCase))
-        {
-            _activeThreadId = nextThreadId;
-            _version++;
-        }
+        // Following describes all subscribed threads, including background and
+        // remote chats. Only an observed foreground document selects a route.
+        _version++;
     }
 
     private static async Task<bool> ReadExactlyAsync(Stream stream, byte[] buffer, CancellationToken cancellationToken)
@@ -435,7 +495,7 @@ internal sealed class CodexIpcActiveThreadMonitor : IDisposable
     }
 
     private int _disposed;
-    private sealed record ActiveConversation(string ThreadId, long Sequence);
+    private sealed record ActiveConversation(string ThreadId, string HostId);
 }
 
 internal sealed class TokenLogMonitor : IDisposable
@@ -463,6 +523,7 @@ internal sealed class TokenLogMonitor : IDisposable
     public string? ActiveThreadId => _selectedThreadId;
 
     public string? PreferredThreadId { get; set; }
+    public bool RequirePreferredThread { get; set; }
 
     public TokenLogMonitor(string? sessionRoot = null)
     {
@@ -491,10 +552,17 @@ internal sealed class TokenLogMonitor : IDisposable
     {
         if (!Directory.Exists(_sessionRoot))
         {
+            SwitchActiveLog(null);
             return null;
         }
 
         var usePreferredThread = !PinActiveSession && !string.IsNullOrWhiteSpace(PreferredThreadId);
+        if (RequirePreferredThread && !PinActiveSession && !usePreferredThread)
+        {
+            ProcessChangedPaths(allowAutomaticSwitch: false);
+            SwitchActiveLog(null);
+            return null;
+        }
         ProcessChangedPaths(allowAutomaticSwitch: !usePreferredThread);
 
         if (usePreferredThread)
@@ -850,7 +918,7 @@ internal sealed class TokenLogMonitor : IDisposable
                 var parsed = TryParseLatestTokenSnapshot(text, path, writeUtc, initialModel, isMainAgent);
                 if (parsed is not null)
                 {
-                    return parsed;
+                    return parsed with { PricingUsages = TokenPricingLogReader.Read(path, parsed, isMainAgent) };
                 }
 
                 if (blockStart == 0)

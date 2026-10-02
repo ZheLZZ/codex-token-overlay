@@ -1,4 +1,4 @@
-﻿param(
+param(
     [ValidateSet('Settings', 'Presentation', 'Layout', 'Interaction', 'Window', 'Form', 'Attachment', 'Theme', 'All')]
     [string]$Area = 'All',
     [string]$DotnetPath = 'dotnet',
@@ -1773,6 +1773,7 @@ try {
             ContextUsedTokens = 62000
             ContextWindowTokens = 200000
             UpdatedAtUtc = '2026-08-11T00:00:00Z'
+            PricingUsages = @(@{ Model = 'gpt-5.5'; TotalTokens = 128400; InputTokens = 82100; CachedInputTokens = 31400; OutputTokens = 12600; IsMainAgent = $true })
         }
         $zeroSnapshot = @{
             ThreadId = '00000000-0000-0000-0000-000000000000'
@@ -1970,7 +1971,33 @@ try {
             }
         }
 
+        $modelNames = [ordered]@{
+            'gpt-6.1-sol' = 'GPT-6.1 Sol'
+            'gpt-6-astra' = 'GPT-6 Astra'
+            'gpt-6-sol' = 'GPT-6 Sol'
+            'gpt-6-luna' = 'GPT-6 Luna'
+            'gpt-5.6-terra' = 'GPT-5.6 Terra'
+            'gpt-5.5' = 'GPT-5.5'
+            'custom-model' = 'custom-model'
+            '' = '未知'
+        }
+        foreach ($model in $modelNames.Keys) {
+            $modelSnapshot = @{} + $snapshot
+            $modelSnapshot.PricingUsages = @(
+                @{ Model = $model; TotalTokens = 100; IsMainAgent = $true },
+                @{ Model = $model; TotalTokens = 100; IsMainAgent = $false }
+            )
+            $presentationCases += @{
+                Name = "model-$model"; Operation = 'Create'; Snapshot = $modelSnapshot
+                PrimaryField = 2048; SecondaryField = 4096; VisibleFields = 32767
+            }
+        }
         $response = Invoke-JsonProbe '--presentation-probe' $presentationCases
+        foreach ($model in $modelNames.Keys) {
+            $modelPresentation = (Get-ProbeCase $response "model-$model").Presentation
+            Assert-Condition ($modelPresentation.Primary.ExpandedLabel -eq "主代理（$($modelNames[$model])）") "主代理模型名称错误：$model"
+            Assert-Condition ($modelPresentation.Secondary.ExpandedLabel -eq "子代理（$($modelNames[$model])×1）") "子代理模型名称错误：$model"
+        }
         $selected = (Get-ProbeCase $response 'primary-secondary').Presentation
         Assert-Condition ($selected.Primary.CompactLabel -eq '总') '主指标紧凑标签不正确。'
         Assert-Condition ($selected.Primary.ExpandedLabel -eq '总 Token') '主指标展开标签不正确。'
@@ -2037,20 +2064,20 @@ try {
         }
 
         $mixedPricing = (Get-ProbeCase $response 'mixed-model-pricing').Presentation
-        Assert-Condition ($mixedPricing.Primary.Value -eq '$8.84') 'Sol 与降价后 Luna 的估算总价不正确。'
+        Assert-Condition ($mixedPricing.Primary.Value -eq '$6.74') 'Sol 与 Luna 的最新估算总价不正确。'
         $mixedInput = @($mixedPricing.ExpandedRows | Where-Object { $_.Field -eq 2 })
         $mixedCached = @($mixedPricing.ExpandedRows | Where-Object { $_.Field -eq 8 })
         $mixedOutput = @($mixedPricing.ExpandedRows | Where-Object { $_.Field -eq 4 })
-        Assert-Condition ($mixedInput.Count -eq 1 -and $mixedInput[0].Value -eq '4.00M · $5.20') 'Sol/Luna 混合输入价格不正确。'
-        Assert-Condition ($mixedCached.Count -eq 1 -and $mixedCached[0].Value -eq '2.00M · $0.52') 'Sol/Luna 混合缓存价格不正确。'
-        Assert-Condition ($mixedOutput.Count -eq 1 -and $mixedOutput[0].Value -eq '200.0k · $3.12') 'Sol/Luna 混合输出价格不正确。'
+        Assert-Condition ($mixedInput.Count -eq 1 -and $mixedInput[0].Value -eq '4.00M · $4.20') 'Sol/Luna 混合输入价格不正确。'
+        Assert-Condition ($mixedCached.Count -eq 1 -and $mixedCached[0].Value -eq '2.00M · $0.42') 'Sol/Luna 混合缓存价格不正确。'
+        Assert-Condition ($mixedOutput.Count -eq 1 -and $mixedOutput[0].Value -eq '200.0k · $2.12') 'Sol/Luna 混合输出价格不正确。'
         $mainAgent = @($mixedPricing.ExpandedRows | Where-Object { $_.Field -eq 2048 })
         $subagents = @($mixedPricing.ExpandedRows | Where-Object { $_.Field -eq 4096 })
         $mainAgentCost = @($mixedPricing.ExpandedRows | Where-Object { $_.Field -eq 8192 })
         $subagentsCost = @($mixedPricing.ExpandedRows | Where-Object { $_.Field -eq 16384 })
-        Assert-Condition ($mainAgent.Count -eq 1 -and $mainAgent[0].ExpandedLabel -eq '主代理（Sol）' -and $mainAgent[0].Value -eq '2.10M') '主代理 Token 独立行不正确。'
-        Assert-Condition ($mainAgentCost.Count -eq 1 -and $mainAgentCost[0].ExpandedLabel -eq '主代理费用' -and $mainAgentCost[0].Value -eq '$8.50') '主代理费用独立行不正确。'
-        Assert-Condition ($subagents.Count -eq 1 -and $subagents[0].ExpandedLabel -eq '子代理（Luna×3）' -and $subagents[0].Value -eq '2.10M') '子代理 Token 独立行不正确。'
+        Assert-Condition ($mainAgent.Count -eq 1 -and $mainAgent[0].ExpandedLabel -eq '主代理（GPT-5.6 Sol）' -and $mainAgent[0].Value -eq '2.10M') '主代理 Token 独立行不正确。'
+        Assert-Condition ($mainAgentCost.Count -eq 1 -and $mainAgentCost[0].ExpandedLabel -eq '主代理费用' -and $mainAgentCost[0].Value -eq '$6.40') '主代理费用独立行不正确。'
+        Assert-Condition ($subagents.Count -eq 1 -and $subagents[0].ExpandedLabel -eq '子代理（GPT-5.6 Luna×3）' -and $subagents[0].Value -eq '2.10M') '子代理 Token 独立行不正确。'
         Assert-Condition ($subagentsCost.Count -eq 1 -and $subagentsCost[0].ExpandedLabel -eq '子代理费用' -and $subagentsCost[0].Value -eq '$0.34') '子代理费用独立行不正确。'
 
         $snapshotType = $assembly.GetType('CodexTokenOverlay.TokenSnapshot', $true)
@@ -2851,7 +2878,7 @@ try {
         $nonCodexForeground = Get-ProbeCase $response 'foreground-non-codex'
         Assert-Condition ($null -eq $nonCodexForeground.HostHandle) '非 Codex 前景窗口不得产生选择结果。'
         $tieBreaker = Get-ProbeCase $response 'largest-host-and-lowest-handle-tie'
-        Assert-Condition ($tieBreaker.HostHandle -eq 110) '主窗口必须优先选择最大面积，并以最小句柄打破面积并列。'
+        Assert-Condition ($tieBreaker.HostHandle -eq 100) '前台主窗口必须优先于同进程更大的后台主窗口。'
         $invalidNormal = Get-ProbeCase $response 'invalid-normal-candidates'
         Assert-Condition ($invalidNormal.HostHandle -eq 100) '隐藏、最小化、有所有者、过小、工具/分层或错误类名的候选不得成为主窗口。'
 

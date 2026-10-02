@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Identify the visible Windows chat through accessibility and the read-only local display-name catalog; retain all IPC subscriptions without treating background/remote replay order as the active task, and clear stale metrics when the visible chat cannot be matched.
+- Prefer the foreground main window over a larger background window, and explicitly decline IPC request discovery as a read-only observer.
+- Update Windows API-equivalent cost rates for GPT-6.1 Sol, GPT-6 and GPT-5.6 models; calculate costs by model and per-request context length, include reported cache writes, and show unavailable costs for unknown models.
+- Preserve historical pricing attribution across model switches and avoid duplicate token events inflating costs or short/long-context buckets inflating agent counts.
 - Refresh Windows token and cost totals when Codex grows an open JSONL log without advancing its modification time, with a two-minute forced reread as a fallback.
 - Restore the collapsed Windows status bar default to total tokens and estimated total cost.
 
