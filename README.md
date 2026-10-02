@@ -2,7 +2,7 @@
 
 [简体中文](README.zh-CN.md)
 
-Codex Token Overlay is a read-only desktop companion that shows token usage for the task currently selected in Codex Desktop. It supports Windows and macOS, follows idle task switches through Codex's local IPC channel, and reads token metrics from local JSONL session logs.
+Codex Token Overlay is a read-only desktop companion that shows token usage for the task currently selected in Codex Desktop. Windows identifies the foreground chat through its accessibility title and local session catalog; macOS follows tasks through local IPC. Both read metrics from local JSONL logs and update when switching to idle tasks.
 
 > [!IMPORTANT]
 > This is an unofficial community project. It is not developed, endorsed, or supported by OpenAI. Codex Desktop's JSONL schema and IPC messages are internal implementation details and may change in a future Codex release.
@@ -15,7 +15,7 @@ Codex Token Overlay is a read-only desktop companion that shows token usage for 
 - Lets you choose exactly which fields are visible.
 - Uses a compact, no-focus capsule that follows the Codex main window, plus a tray icon on Windows.
 - Uses a native menu-bar item on macOS, with launch-at-login control in its menu.
-- Falls back to the newest root Codex Desktop session when internal IPC is unavailable.
+- Windows waits when the visible chat cannot be identified; macOS falls back to the newest root session when IPC is unavailable.
 - Reads local files only; it has no telemetry, analytics, network API, or upload feature.
 
 ## Downloads
@@ -102,6 +102,27 @@ Developers and test runners can isolate Windows preferences with `--settings <ab
 
 These values describe local session-log events. They are not an invoice, an API charge calculation, or an authoritative ChatGPT plan-usage counter.
 
+### Windows cost estimates
+
+Costs use OpenAI Standard API-equivalent USD rates verified on 2026-09-30. Prices per million tokens:
+
+| Model | Uncached input | Cache read | Cache write | Output |
+| --- | ---: | ---: | ---: | ---: |
+| GPT-6.1 Sol | 2.00 | 0.10 | 2.50 | 10.00 |
+| GPT-6 Sol | 2.00 | 0.20 | 2.50 | 10.00 |
+| GPT-6 Astra | 10.00 | 1.00 | 12.50 | 50.00 |
+| GPT-6 Luna | 0.10 | 0.01 | 0.125 | 0.50 |
+| GPT-5.6 Sol (including gpt-5.6) | 4.00 | 0.40 | 5.00 | 20.00 |
+| GPT-5.6 Terra | 2.00 | 0.20 | 2.50 | 12.00 |
+| GPT-5.6 Luna | 0.20 | 0.02 | 0.25 | 1.20 |
+| GPT-5.5 | 5.00 | 0.50 | No separate premium | 30.00 |
+
+Sources: [API pricing](https://developers.openai.com/api/docs/pricing), [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol), [GPT-6 Sol](https://developers.openai.com/api/docs/models/gpt-6-sol), [GPT-5.6 Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra), [GPT-5.6 Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna), and [GPT-5.5](https://developers.openai.com/api/docs/models/gpt-5.5). GPT-5.6 Sol's promotional rates are available at least through 2026-11-21; the rate table requires future verification.
+
+The estimator uses differences between cumulative counters, the model at each event, and the input length of that request. Duplicate events do not add cost, and switching models does not reprice earlier usage. Requests above 272,000 input tokens use 2x input/cache rates and 1.5x output rates; cumulative session input and context-window capacity do not trigger this multiplier.
+
+The input cost includes uncached input and reported `cache_write_input_tokens`, using mutually exclusive rates. Reasoning tokens are already included in output. Unknown or missing models display an unavailable cost (—). Missing cache-write counters default to zero. Logs do not expose processing-tier or regional billing information, so estimates use Standard rates and exclude tool fees, Fast/Ultrafast premiums and regional surcharges. Estimates compare token costs rather than actual ChatGPT subscription charges.
+
 ## How task following works
 
 The app never modifies Codex data:
@@ -109,10 +130,10 @@ The app never modifies Codex data:
 1. It connects as a read-only client to Codex Desktop's local IPC endpoint.
    - Windows: `\\.\pipe\codex-ipc`
    - macOS: `$CODEX_HOME/ipc/ipc.sock`, with compatible legacy socket fallbacks
-2. It listens for the task ID followed by the active Codex window.
+2. Windows matches the foreground main document's chat title against display names in `$CODEX_HOME/state_N.sqlite`, using IPC subscriptions only to help disambiguate duplicate titles. Newer IPC broadcasts include background and remote subscriptions, rather than only the selected chat. macOS continues to use IPC task routing.
 3. It finds the matching root-session JSONL file and reads the newest complete `token_count` event.
 4. A task-ID change forces an immediate parse, so switching to an idle task does not depend on a new log write.
-5. If IPC is unavailable, it shows the newest Codex Desktop root session instead.
+5. Windows waits when no match exists, several candidates remain, or window information is unavailable. Chats without a matching local catalog entry and log have no local metrics. macOS falls back to the newest root session when IPC is unavailable.
 
 On macOS, the app validates that an IPC path is a Unix socket owned by the current user and that its directory is not writable by another user. It only connects; it never creates, deletes, or replaces Codex's socket.
 
@@ -129,7 +150,7 @@ Session JSONL files can contain conversation data. Do not upload them when repor
 
 ### Switching tasks does not update the display
 
-Task selection comes from an internal Codex IPC message. Restart both Codex Desktop and Codex Token Overlay, then check for a newer release if Codex was recently updated. Fallback mode can show recent token data but cannot always identify an idle task selected in the UI.
+Windows needs a readable main-window chat title and local session catalog; unresolved duplicate titles wait instead of guessing. Open a local chat that has completed a model response, then restart the overlay. macOS uses internal IPC; check for an updated overlay if Codex was recently updated.
 
 ### The macOS menu item says `Token —`
 
@@ -153,6 +174,7 @@ Development requires the .NET 10 SDK:
 dotnet restore .\src\CodexTokenOverlay\CodexTokenOverlay.csproj
 dotnet build .\src\CodexTokenOverlay\CodexTokenOverlay.csproj -c Release
 .\scripts\Test-LogParser.ps1
+.\scripts\Test-TokenPricing.ps1
 ```
 
 Create both local Lite and Standalone archives with:

@@ -27,6 +27,7 @@ internal sealed class OverlayContext : ApplicationContext
         _collapsedFieldItems = new();
     private readonly OverlayInteractionState _interaction = new();
     private readonly ActiveRouteThreadState _activeRouteThread = new();
+    private readonly VisibleThreadRouteMonitor _visibleRouteMonitor;
     private readonly OverlayAnchorTargetState _anchorTargetState = new();
     private readonly ManualAttachmentCoordinator _manualAttachment = new();
     private readonly string? _settingsPath;
@@ -50,6 +51,8 @@ internal sealed class OverlayContext : ApplicationContext
     {
         _settingsPath = settingsPath;
         _monitor = new TokenLogMonitor(sessionRoot);
+        _monitor.RequirePreferredThread = true;
+        _visibleRouteMonitor = new VisibleThreadRouteMonitor(sessionRoot);
         _settings = OverlaySettings.Load(_settingsPath);
         _presentation = OverlayPresentationBuilder.CreateWaiting(
             "正在寻找当前 Codex 会话…",
@@ -322,7 +325,9 @@ internal sealed class OverlayContext : ApplicationContext
                 : OverlayPresentationBuilder.ShortThreadId(_pendingThreadId);
             _pinSessionMenuItem.Enabled = !string.IsNullOrWhiteSpace(_pendingThreadId);
             _presentation = OverlayPresentationBuilder.CreateWaiting(
-                $"等待会话 {shortPendingId} 的 token 数据…",
+                string.IsNullOrWhiteSpace(_pendingThreadId)
+                    ? "等待识别当前聊天…"
+                    : $"等待会话 {shortPendingId} 的 token 数据…",
                 _settings.CollapsedPrimaryField,
                 _settings.CollapsedSecondaryField,
                 _settings.VisibleFields);
@@ -392,17 +397,17 @@ internal sealed class OverlayContext : ApplicationContext
         var uiScheduler = TaskScheduler.FromCurrentSynchronizationContext();
         _ = Task.Run(() =>
             {
+                var observation = _visibleRouteMonitor.Poll();
+                if (observation.HasWindow)
+                {
+                    _routeMonitor.SetVisibleSelection(VisibleThreadRouteResolver.Resolve(
+                        observation,
+                        _routeMonitor.GetLocalFollowingThreadIds()));
+                }
                 var routeStatus = _routeMonitor.GetStatus();
                 if (!_monitor.PinActiveSession)
                 {
-                    if (!string.IsNullOrWhiteSpace(routeStatus.ThreadId))
-                    {
-                        _monitor.PreferredThreadId = routeStatus.ThreadId;
-                    }
-                    else if (!routeStatus.IsConnected)
-                    {
-                        _monitor.PreferredThreadId = null;
-                    }
+                    _monitor.PreferredThreadId = routeStatus.ThreadId;
                 }
                 var snapshot = _monitor.Poll();
                 return (
@@ -915,11 +920,7 @@ internal sealed class OverlayContext : ApplicationContext
 
     private static string RouteStatusSuffix(ActiveThreadRouteStatus status)
     {
-        if (status.ActiveWindowCount > 1)
-        {
-            return $" · 多窗口 {status.ActiveWindowCount}";
-        }
-        return status.IsConnected ? " · 已同步" : " · 日志模式";
+        return $" · {status.SelectionReason ?? "等待窗口信息"}";
     }
 
     private void ExitOverlay()
